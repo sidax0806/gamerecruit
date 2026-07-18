@@ -1,10 +1,6 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from datetime import datetime
-
-WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
-
 
 # ============================
 # モーダル（募集作成）
@@ -176,9 +172,12 @@ class RecruitView(discord.ui.View):
             await interaction.response.send_message("❌ この募集を取り下げできるのは作成者のみです。", ephemeral=True)
             return
 
-        # VCがあれば削除
+        # VCがあれば削除（NotFound対策済み）
         if self.vc_channel:
-            await self.vc_channel.delete()
+            try:
+                await self.vc_channel.delete()
+            except discord.NotFound:
+                pass
 
         await interaction.message.delete()
         await interaction.response.send_message("募集を取り下げました。", ephemeral=True)
@@ -198,17 +197,3 @@ class Recruit(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Recruit(bot))
-
-
-# ============================
-# VC自動削除イベント
-# ============================
-async def setup_events(bot: commands.Bot):
-    @bot.event
-    async def on_voice_state_update(member, before, after):
-        # VCから抜けた場合
-        if before.channel:
-            if hasattr(bot, "active_vcs") and before.channel.id in bot.active_vcs:
-                if len(before.channel.members) == 0:
-                    await before.channel.delete()
-                    bot.active_vcs.remove(before.channel.id)
