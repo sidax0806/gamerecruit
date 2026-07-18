@@ -148,13 +148,20 @@ class RecruitView(discord.ui.View):
             await interaction.response.send_message("❌ VCはすでに作成済みです。", ephemeral=True)
             return
 
-        vc = await interaction.guild.create_voice_channel(f"{self.game} VC")
+        # 募集メッセージがあるカテゴリにVCを作る
+        category = interaction.channel.category
+        vc = await category.create_voice_channel(f"{self.game} VC")
         self.vc_channel = vc
 
         # VC監視リストに登録
         if not hasattr(interaction.client, "active_vcs"):
             interaction.client.active_vcs = set()
         interaction.client.active_vcs.add(vc.id)
+
+        # VC削除通知用にメッセージを保存
+        if not hasattr(interaction.client, "vc_views"):
+            interaction.client.vc_views = {}
+        interaction.client.vc_views[vc.id] = interaction.message
 
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 

@@ -17,11 +17,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
-    # active_vcs が無ければ作る
     if not hasattr(bot, "active_vcs"):
         bot.active_vcs = set()
 
-    # スラッシュコマンド同期
+    if not hasattr(bot, "vc_views"):
+        bot.vc_views = {}
+
     try:
         synced = await bot.tree.sync()
         print(f"Slash commands synced: {len(synced)}")
@@ -30,19 +31,15 @@ async def on_ready():
 
 
 # ============================
-# VC自動削除イベント（完全版）
+# VC自動削除イベント（通知付き）
 # ============================
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # VCから抜けた場合（移動も含む）
     if before.channel is not None:
+        if before.channel.id in bot.active_vcs:
 
-        # このVCが募集で作ったVCかどうか
-        if hasattr(bot, "active_vcs") and before.channel.id in bot.active_vcs:
+            channel = before.channel
 
-            channel = before.channel  # 最新状態を取得
-
-            # メンバーが0人になったら削除
             if len(channel.members) == 0:
                 try:
                     await channel.delete()
@@ -50,8 +47,16 @@ async def on_voice_state_update(member, before, after):
                 except discord.NotFound:
                     print("VC already deleted (NotFound).")
 
-                # active_vcs から削除
+                # VC削除通知
+                msg = bot.vc_views.get(channel.id)
+                if msg:
+                    try:
+                        await msg.reply("🔔 VCが削除されました（無人になったため）")
+                    except:
+                        pass
+
                 bot.active_vcs.remove(channel.id)
+                bot.vc_views.pop(channel.id, None)
 
 
 # ============================
