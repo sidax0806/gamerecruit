@@ -7,7 +7,7 @@ WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
 
 
 # ============================
-# モーダル（入力フォーム）
+# モーダル（募集作成）
 # ============================
 class RecruitModal(discord.ui.Modal, title="ゲーム募集の作成"):
     game = discord.ui.TextInput(
@@ -17,18 +17,11 @@ class RecruitModal(discord.ui.Modal, title="ゲーム募集の作成"):
         max_length=50
     )
 
-    date = discord.ui.TextInput(
-        label="日付（YYYY-MM-DD）",
-        placeholder="例：2026-07-18",
+    datetime_text = discord.ui.TextInput(
+        label="日時（フリー入力）",
+        placeholder="例：7/23 22時 / 揃い次第 / 今から など",
         required=True,
-        max_length=10
-    )
-
-    time = discord.ui.TextInput(
-        label="開始時間（例：21:00）",
-        placeholder="例：21:00",
-        required=True,
-        max_length=10
+        max_length=50
     )
 
     note = discord.ui.TextInput(
@@ -43,22 +36,10 @@ class RecruitModal(discord.ui.Modal, title="ゲーム募集の作成"):
         self.owner_id = owner_id
 
     async def on_submit(self, interaction: discord.Interaction):
-        # 日付の形式チェック
-        try:
-            parsed_date = datetime.strptime(self.date.value, "%Y-%m-%d").date()
-        except ValueError:
-            await interaction.response.send_message(
-                "❌ 日付の形式が正しくありません。例：2026-07-18",
-                ephemeral=True
-            )
-            return
-
-        # View を作成
         view = RecruitView(
             game=self.game.value,
-            time=self.time.value,
+            datetime_text=self.datetime_text.value,
             note=self.note.value or "なし",
-            date=parsed_date,
             owner_id=self.owner_id
         )
 
@@ -72,34 +53,86 @@ class RecruitModal(discord.ui.Modal, title="ゲーム募集の作成"):
 
 
 # ============================
+# モーダル（募集編集）
+# ============================
+class EditRecruitModal(discord.ui.Modal, title="募集内容の編集"):
+    def __init__(self, view: "RecruitView"):
+        super().__init__()
+        self.view = view
+
+        self.game = discord.ui.TextInput(
+            label="ゲーム名",
+            default=view.game,
+            required=True
+        )
+
+        self.datetime_text = discord.ui.TextInput(
+            label="日時（フリー入力）",
+            default=view.datetime_text,
+            required=True
+        )
+
+        self.note = discord.ui.TextInput(
+            label="その他",
+            default=view.note,
+            required=False,
+            style=discord.TextStyle.long
+        )
+
+        self.add_item(self.game)
+        self.add_item(self.datetime_text)
+        self.add_item(self.note)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.view.game = self.game.value
+        self.view.datetime_text = self.datetime_text.value
+        self.view.note = self.note.value or "なし"
+
+        # VCが既にある場合は名前を更新
+        if self.view.vc_channel:
+            await self.view.vc_channel.edit(name=f"{self.view.game} VC")
+
+        await interaction.response.edit_message(
+            embed=self.view.build_embed(),
+            view=self.view
+        )
+
+
+# ============================
 # 募集メッセージの View
 # ============================
 class RecruitView(discord.ui.View):
-    def __init__(self, game, time, note, date, owner_id):
+    def __init__(self, game, datetime_text, note, owner_id):
         super().__init__(timeout=None)
         self.game = game
-        self.time = time
+        self.datetime_text = datetime_text
         self.note = note
-        self.date = date  # datetime.date 型
         self.owner_id = owner_id
         self.members = set()
+        self.vc_channel = None  # VC未生成
 
     def build_embed(self):
-        weekday = WEEKDAYS[self.date.weekday()]  # 曜日を自動計算
-
         member_list = "\n".join([m.mention for m in self.members]) if self.members else "なし"
 
         embed = discord.Embed(
             title="🎮 ゲーム募集",
             description=(
-                f"**日付**：{self.date.strftime('%Y-%m-%d')}（{weekday}）\n"
                 f"**ゲーム名**：{self.game}\n"
-                f"**開始時間**：{self.time}\n"
+                f"**日時**：{self.datetime_text}\n"
                 f"**その他**：{self.note}\n\n"
                 f"**参加者一覧（{len(self.members)}人）**\n{member_list}"
             ),
             color=discord.Color.blue()
         )
+
+        # VC生成後のみ表示
+        if self.vc_channel:
+            embed.add_field(
+                name="VCチャンネル",
+                value=self.vc_channel.mention,
+                inline=False
+            )
+
         return embed
 
     @discord.ui.button(label="参加", style=discord.ButtonStyle.green)
@@ -113,14 +146,39 @@ class RecruitView(discord.ui.View):
             self.members.remove(interaction.user)
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-    @discord.ui.button(label="取り下げ", style=discord.ButtonStyle.gray)
+    @discord.ui.button(label="開始（VC生成）", style=discord.ButtonStyle.blurple)
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.vc_channel:
+            await interaction.response.send_message("❌ VCはすでに作成済みです。", ephemeral=True)
+            return
+
+        vc = await interaction.guild.create_voice_channel(f"{self.game} VC")
+        self.vc_channel = vc
+
+        # VC監視リストに登録
+        if not hasattr(interaction.client, "active_vcs"):
+            interaction.client.active_vcs = set()
+        interaction.client.active_vcs.add(vc.id)
+
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="編集", style=discord.ButtonStyle.gray)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("❌ 編集できるのは作成者のみです。", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(EditRecruitModal(self))
+
+    @discord.ui.button(label="取り下げ", style=discord.ButtonStyle.red)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "❌ この募集を取り下げできるのは作成者のみです。",
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ この募集を取り下げできるのは作成者のみです。", ephemeral=True)
             return
+
+        # VCがあれば削除
+        if self.vc_channel:
+            await self.vc_channel.delete()
 
         await interaction.message.delete()
         await interaction.response.send_message("募集を取り下げました。", ephemeral=True)
@@ -140,3 +198,17 @@ class Recruit(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Recruit(bot))
+
+
+# ============================
+# VC自動削除イベント
+# ============================
+async def setup_events(bot: commands.Bot):
+    @bot.event
+    async def on_voice_state_update(member, before, after):
+        # VCから抜けた場合
+        if before.channel:
+            if hasattr(bot, "active_vcs") and before.channel.id in bot.active_vcs:
+                if len(before.channel.members) == 0:
+                    await before.channel.delete()
+                    bot.active_vcs.remove(before.channel.id)
